@@ -4,16 +4,13 @@ import sys
 import os
 import numpy as np
 
+# classes = ['car', 'pedestrian', 'cyclist', 'van', 'truck', 'person_sitting', 'tram']
 classes = ['car', 'pedestrian', 'cyclist']
 difficulties = ['easy', 'moderate', 'hard']
 params = ['detection', 'orientation']
 
 if len(sys.argv)<2:
     print 'Usage: parser.py results_folder'
-
-# print "This is the name of the script: ", sys.argv[0]
-# print "Number of arguments: ", len(sys.argv)
-# print "The arguments are: " , str(sys.argv)
 
 result_sha = sys.argv[1]
 txt_dir = os.path.join('build','results', result_sha)
