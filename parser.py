@@ -22,6 +22,10 @@ for class_name in classes:
     for param in params:
         txt_name = os.path.join(txt_dir, 'stats_' + class_name + '_' + param + '.txt')
 
+        if not os.path.isfile(txt_name):
+            print txt_name, 'not found'
+            continue
+
         cont = np.loadtxt(txt_name)
 
         for idx, difficulty in enumerate(difficulties):
