@@ -29,11 +29,11 @@ const int32_t MAX_OCCLUSION[3]  = {0, 1, 2};        // maximum occlusion level o
 const double  MAX_TRUNCATION[3] = {0.15, 0.3, 0.5}; // maximum truncation level of the groundtruth used for evaluation
 
 // evaluated object classes
-enum CLASSES{CAR=0, PEDESTRIAN=1, CYCLIST=2};
+enum CLASSES{CAR=0, PEDESTRIAN=1, CYCLIST=2, VAN=3, TRUCK=4, PERSON_SITTING=5, TRAM=6};
 
 // parameters varying per class
 vector<string> CLASS_NAMES;
-const double   MIN_OVERLAP[3] = {0.7, 0.5, 0.5};                  // the minimum overlap required for evaluation
+const double   MIN_OVERLAP[9] = {0.7, 0.5, 0.5, 0.7, 0.7, 0.5, 0.7};                  // the minimum overlap required for evaluation
 
 // no. of recall steps that should be evaluated (discretized)
 const double N_SAMPLE_PTS = 41;
@@ -43,6 +43,10 @@ void initGlobals () {
   CLASS_NAMES.push_back("car");
   CLASS_NAMES.push_back("pedestrian");
   CLASS_NAMES.push_back("cyclist");
+  CLASS_NAMES.push_back("van");
+  CLASS_NAMES.push_back("truck");
+  CLASS_NAMES.push_back("person_sitting");
+  CLASS_NAMES.push_back("tram");
 }
 
 /*=======================================================================
@@ -101,7 +105,7 @@ struct tDetection {
 FUNCTIONS TO LOAD DETECTION AND GROUND TRUTH DATA ONCE, SAVE RESULTS
 =======================================================================*/
 
-vector<tDetection> loadDetections(string file_name, bool &compute_aos, bool &eval_car, bool &eval_pedestrian, bool &eval_cyclist, bool &success) {
+vector<tDetection> loadDetections(string file_name, bool &compute_aos, std::vector<bool> &eval_class, bool &success) {
 
   // holds all detections (ignored detections are indicated by an index vector
   vector<tDetection> detections;
@@ -127,12 +131,10 @@ vector<tDetection> loadDetections(string file_name, bool &compute_aos, bool &eva
         compute_aos = false;
 
       // a class is only evaluated if it is detected at least once
-      if(!eval_car && (!strcasecmp(d.box.type.c_str(), "car") || !strcasecmp(d.box.type.c_str(), "Car")))
-        eval_car = true;
-      if(!eval_pedestrian && (!strcasecmp(d.box.type.c_str(), "pedestrian") || !strcasecmp(d.box.type.c_str(), "Pedestrian")))
-        eval_pedestrian = true;
-      if(!eval_cyclist && (!strcasecmp(d.box.type.c_str(), "cyclist") || !strcasecmp(d.box.type.c_str(), "Cyclist")))
-        eval_cyclist = true;
+      for (int cls_ix=0; cls_ix<CLASS_NAMES.size(); cls_ix++){
+        if(!eval_class[cls_ix] && (!strcasecmp(d.box.type.c_str(), CLASS_NAMES[cls_ix].c_str())))
+          eval_class[cls_ix] = true;
+      }
     }
   }
   fclose(fp);
@@ -282,7 +284,10 @@ void cleanData(CLASSES current_class, const vector<tGroundtruth> &gt, const vect
       valid_class = 0;
     else if(!strcasecmp(CLASS_NAMES[current_class].c_str(), "Car") && !strcasecmp("Van", gt[i].box.type.c_str()))
       valid_class = 0;
-
+    else if (!strcasecmp(CLASS_NAMES[current_class].c_str(), "Person_sitting") && !strcasecmp("Pedestrian", gt[i].box.type.c_str()))
+      valid_class = 0;
+    else if (!strcasecmp(CLASS_NAMES[current_class].c_str(), "Van") && !strcasecmp("Car", gt[i].box.type.c_str()))
+      valid_class = 0;
     // classes not used for evaluation
     else
       valid_class = -1;
@@ -819,6 +824,7 @@ bool eval(string result_sha,string input_dataset,int top_stats){
 
   // for all images read groundtruth and detections
   std::cout << "Loading detections... " << std::endl;
+  std::vector<bool> do_eval_class(CLASS_NAMES.size());
 
   for (int32_t i=0; i<N_TESTIMAGES; i++) {
 
@@ -838,13 +844,13 @@ bool eval(string result_sha,string input_dataset,int top_stats){
     // read ground truth and result poses
     bool gt_success,det_success;
     vector<tGroundtruth> gt   = loadGroundtruth(gt_dir + "/" + file_name,gt_success);
-    vector<tDetection>   det  = loadDetections(result_dir + "/data/" + file_name, compute_aos, eval_car, eval_pedestrian, eval_cyclist,det_success);
+    vector<tDetection>   det  = loadDetections(result_dir + "/data/" + file_name, compute_aos, do_eval_class, det_success);
     groundtruth.push_back(gt);
     detections.push_back(det);
 
     // check for errors
     if (!gt_success) {
-      std::cout << "ERROR: Couldn't read: %s of ground truth." << std::endl;
+      std::cout << "ERROR: Couldn't read: " << gt_dir + "/" + file_name << " of ground truth." << std::endl;
       return false;
     }
     if (!det_success) {
@@ -857,104 +863,36 @@ bool eval(string result_sha,string input_dataset,int top_stats){
   // holds pointers for result files
   FILE *fp_det=0, *fp_ori=0;
 
-  // eval cars
-  if(eval_car){
-
-    if (top_stats==0) {
-      fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[CAR] + "_detection.txt").c_str(),"w");
-      if(compute_aos)
-        fp_ori = fopen((result_dir + "/stats_" + CLASS_NAMES[CAR] + "_orientation.txt").c_str(),"w");
-    }
-
-    vector<double> precision[3], aos[3];
-    if (top_stats==0 || top_stats==1) {
-      std::cout << "Evaluating Car... ";
-      std::cout << "EASY" << std::endl;
-      bool car_easy = eval_class(fp_det,fp_ori,CAR,groundtruth,detections,compute_aos,precision[0],aos[0],EASY,top_stats);
-      std::cout << "MODERATE" << std::endl;
-      bool car_mod = eval_class(fp_det,fp_ori,CAR,groundtruth,detections,compute_aos,precision[1],aos[1],MODERATE,top_stats);
-      std::cout << "HARD" << std::endl;
-      bool car_hard = eval_class(fp_det,fp_ori,CAR,groundtruth,detections,compute_aos,precision[2],aos[2],HARD,top_stats);
-      if(!car_easy || !car_mod || !car_hard){
-        std::cout << "Car evaluation failed." << std::endl;
-        return false;
+  for (int cls_ix=0; cls_ix<CLASS_NAMES.size(); cls_ix++){
+    if (do_eval_class[cls_ix]){
+      if (top_stats==0) {
+        fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[cls_ix] + "_detection.txt").c_str(),"w");
+        if(compute_aos)
+          fp_ori = fopen((result_dir + "/stats_" + CLASS_NAMES[cls_ix] + "_orientation.txt").c_str(),"w");
       }
-    }
 
-    if (top_stats==0) {
-      fclose(fp_det);
-      saveAndPlotPlots(plot_dir,CLASS_NAMES[CAR] + "_detection",CLASS_NAMES[CAR],precision,0);
-      if(compute_aos){
-        saveAndPlotPlots(plot_dir,CLASS_NAMES[CAR] + "_orientation",CLASS_NAMES[CAR],aos,1);
-        fclose(fp_ori);
+      vector<double> precision[3], aos[3];
+      if (top_stats==0 || top_stats==1) {
+        std::cout << "Evaluating " << CLASS_NAMES[cls_ix] << " ..." << std::endl;
+        std::cout << "EASY" << std::endl;
+        bool car_easy = eval_class(fp_det,fp_ori,static_cast<CLASSES>(cls_ix),groundtruth,detections,compute_aos,precision[0],aos[0],EASY,top_stats);
+        std::cout << "MODERATE" << std::endl;
+        bool car_mod = eval_class(fp_det,fp_ori,static_cast<CLASSES>(cls_ix),groundtruth,detections,compute_aos,precision[1],aos[1],MODERATE,top_stats);
+        std::cout << "HARD" << std::endl;
+        bool car_hard = eval_class(fp_det,fp_ori,static_cast<CLASSES>(cls_ix),groundtruth,detections,compute_aos,precision[2],aos[2],HARD,top_stats);
+        if(!car_easy || !car_mod || !car_hard){
+          std::cout << CLASS_NAMES[cls_ix] << " evaluation failed." << std::endl;
+          return false;
+        }
       }
-    }
-  }
 
-  // eval pedestrians
-  if(eval_pedestrian){
-
-    if (top_stats==0) {
-      fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[PEDESTRIAN] + "_detection.txt").c_str(),"w");
-      if(compute_aos)
-        fp_ori = fopen((result_dir + "/stats_" + CLASS_NAMES[PEDESTRIAN] + "_orientation.txt").c_str(),"w");
-    }
-
-    vector<double> precision[3], aos[3];
-    if (top_stats==0 || top_stats==2) {
-      std::cout << "Evaluating Pedestrians... ";
-      std::cout << "EASY" << std::endl;
-      bool ped_easy = eval_class(fp_det,fp_ori,PEDESTRIAN,groundtruth,detections,compute_aos,precision[0],aos[0],EASY,top_stats);
-      std::cout << "MODERATE" << std::endl;
-      bool ped_mod = eval_class(fp_det,fp_ori,PEDESTRIAN,groundtruth,detections,compute_aos,precision[1],aos[1],MODERATE,top_stats);
-      std::cout << "HARD" << std::endl;
-      bool ped_hard = eval_class(fp_det,fp_ori,PEDESTRIAN,groundtruth,detections,compute_aos,precision[2],aos[2],HARD,top_stats);
-      if(!ped_easy || !ped_mod || !ped_hard){
-        std::cout << "Pedestrian evaluation failed." << std::endl;
-        return false;
-      }
-    }
-
-    if (top_stats==0) {
-      fclose(fp_det);
-      saveAndPlotPlots(plot_dir,CLASS_NAMES[PEDESTRIAN] + "_detection",CLASS_NAMES[PEDESTRIAN],precision,0);
-      if(compute_aos){
-        fclose(fp_ori);
-        saveAndPlotPlots(plot_dir,CLASS_NAMES[PEDESTRIAN] + "_orientation",CLASS_NAMES[PEDESTRIAN],aos,1);
-      }
-    }
-  }
-
-  // eval cyclists
-  if(eval_cyclist){
-
-    if (top_stats==0) {
-      fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[CYCLIST]  + "_detection.txt").c_str(),"w");
-      if(compute_aos)
-        fp_ori = fopen((result_dir + "/stats_" + CLASS_NAMES[CYCLIST] + "_orientation.txt").c_str(),"w");
-    }
-
-    vector<double> precision[3], aos[3];
-    if (top_stats==0 || top_stats==3) {
-      std::cout << "Evaluating Cyclist...";
-      std::cout << "EASY" << std::endl;
-      bool cyc_easy = eval_class(fp_det,fp_ori,CYCLIST,groundtruth,detections,compute_aos,precision[0],aos[0],EASY,top_stats);
-      std::cout << "MODERATE" << std::endl;
-      bool cyc_mod = eval_class(fp_det,fp_ori,CYCLIST,groundtruth,detections,compute_aos,precision[1],aos[1],MODERATE,top_stats);
-      std::cout << "HARD" << std::endl;
-      bool cyc_hard = eval_class(fp_det,fp_ori,CYCLIST,groundtruth,detections,compute_aos,precision[2],aos[2],HARD,top_stats);
-      if(!cyc_easy || !cyc_mod || !cyc_hard){
-        std::cout << "Cyclist evaluation failed." << std::endl;
-        return false;
-      }
-    }
-
-    if (top_stats==0) {
-      fclose(fp_det);
-      saveAndPlotPlots(plot_dir,CLASS_NAMES[CYCLIST] + "_detection",CLASS_NAMES[CYCLIST],precision,0);
-      if(compute_aos){
-        fclose(fp_ori);
-        saveAndPlotPlots(plot_dir,CLASS_NAMES[CYCLIST] + "_orientation",CLASS_NAMES[CYCLIST],aos,1);
+      if (top_stats==0) {
+        fclose(fp_det);
+        saveAndPlotPlots(plot_dir,CLASS_NAMES[cls_ix] + "_detection",CLASS_NAMES[cls_ix],precision,0);
+        if(compute_aos){
+          saveAndPlotPlots(plot_dir,CLASS_NAMES[cls_ix] + "_orientation",CLASS_NAMES[cls_ix],aos,1);
+          fclose(fp_ori);
+        }
       }
     }
   }
