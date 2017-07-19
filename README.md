@@ -1,5 +1,6 @@
 # eval_kitti #
 
+[![Build Status](https://travis-ci.org/cguindel/eval_kitti.svg?branch=master)](https://travis-ci.org/cguindel/eval_kitti)
 [![License: CC BY-NC-SA](https://img.shields.io/badge/License-CC%20BY--NC--SA%203.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/3.0/)
 
 The *eval_kitti* software contains tools to evaluate object detection results using the KITTI dataset. The code is based on the [KITTI object development kit](http://www.cvlibs.net/datasets/kitti/eval_object.php).
