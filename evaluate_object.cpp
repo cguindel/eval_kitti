@@ -105,7 +105,7 @@ struct tDetection {
 FUNCTIONS TO LOAD DETECTION AND GROUND TRUTH DATA ONCE, SAVE RESULTS
 =======================================================================*/
 
-vector<tDetection> loadDetections(string file_name, bool &compute_aos, std::vector<bool> &eval_class, bool &success) {
+vector<tDetection> loadDetections(string file_name, bool &compute_aos, std::vector<bool> &eval_class, bool &success, vector<int> &count) {
 
   // holds all detections (ignored detections are indicated by an index vector
   vector<tDetection> detections;
@@ -132,8 +132,12 @@ vector<tDetection> loadDetections(string file_name, bool &compute_aos, std::vect
 
       // a class is only evaluated if it is detected at least once
       for (int cls_ix=0; cls_ix<CLASS_NAMES.size(); cls_ix++){
-        if(!eval_class[cls_ix] && (!strcasecmp(d.box.type.c_str(), CLASS_NAMES[cls_ix].c_str())))
-          eval_class[cls_ix] = true;
+        if (!strcasecmp(d.box.type.c_str(), CLASS_NAMES[cls_ix].c_str())){
+          count[cls_ix]++;
+          if(!eval_class[cls_ix])
+            eval_class[cls_ix] = true;
+          break;
+        }
       }
     }
   }
@@ -142,7 +146,7 @@ vector<tDetection> loadDetections(string file_name, bool &compute_aos, std::vect
   return detections;
 }
 
-vector<tGroundtruth> loadGroundtruth(string file_name,bool &success) {
+vector<tGroundtruth> loadGroundtruth(string file_name,bool &success, vector<int> &count) {
 
   // holds all ground truth (ignored ground truth is indicated by an index vector
   vector<tGroundtruth> groundtruth;
@@ -162,6 +166,13 @@ vector<tGroundtruth> loadGroundtruth(string file_name,bool &success) {
                    &trash,      &trash,        &trash )==15) {
       g.box.type = str;
       groundtruth.push_back(g);
+    }
+    for (int cls_idx=0; cls_idx<CLASS_NAMES.size(); cls_idx++){
+      CLASSES cls = static_cast<CLASSES>(cls_idx);
+      if(!strcasecmp(g.box.type.c_str(), CLASS_NAMES[cls].c_str())){
+        count[cls_idx]++;
+        break;
+      }
     }
   }
   fclose(fp);
@@ -822,6 +833,11 @@ bool eval(string result_sha,string input_dataset,int top_stats){
 
   N_TESTIMAGES = indices.size();
 
+  // Just to get stats for each class
+  vector<int> count, count_gt;
+  count.assign(CLASS_NAMES.size(), 0);
+  count_gt.assign(CLASS_NAMES.size(), 0);
+
   // for all images read groundtruth and detections
   std::cout << "Loading detections... " << std::endl;
   std::vector<bool> do_eval_class(CLASS_NAMES.size());
@@ -843,8 +859,8 @@ bool eval(string result_sha,string input_dataset,int top_stats){
 
     // read ground truth and result poses
     bool gt_success,det_success;
-    vector<tGroundtruth> gt   = loadGroundtruth(gt_dir + "/" + file_name,gt_success);
-    vector<tDetection>   det  = loadDetections(result_dir + "/data/" + file_name, compute_aos, do_eval_class, det_success);
+    vector<tGroundtruth> gt   = loadGroundtruth(gt_dir + "/" + file_name, gt_success, count_gt);
+    vector<tDetection>   det  = loadDetections(result_dir + "/data/" + file_name, compute_aos, do_eval_class, det_success,count);
     groundtruth.push_back(gt);
     detections.push_back(det);
 
@@ -857,6 +873,19 @@ bool eval(string result_sha,string input_dataset,int top_stats){
       std::cout << "ERROR: Couldn't read: " << result_dir + "/data/" + file_name <<std::endl;
       return false;
     }
+  }
+  // Print stats
+  cout << "-----------" << endl;
+  cout << "GT STATS" << endl;
+  cout << "-----------" << endl;
+  for (int cls_idx=0; cls_idx<CLASS_NAMES.size(); cls_idx++){
+    cout << CLASS_NAMES[cls_idx].c_str() << " : " << count_gt[cls_idx] << endl;
+  }
+  cout << "-----------" << endl;
+  cout << "DET STATS" << endl;
+  cout << "-----------" << endl;
+  for (int cls_idx=0; cls_idx<CLASS_NAMES.size(); cls_idx++){
+    cout << CLASS_NAMES[cls_idx].c_str() << " : " << count[cls_idx] << endl;
   }
   std::cout << "  done." << std::endl;
 
