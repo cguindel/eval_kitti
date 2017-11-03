@@ -1,6 +1,4 @@
 sudo: required
-before_install:
-  - sudo apt-get install libpng++-dev
 
 # Enable C++ support
 language: cpp
@@ -10,6 +8,7 @@ compiler:
   - gcc
 
 install:
+  - sudo apt-get install libboost-all-dev
   - DEPS_DIR="${TRAVIS_BUILD_DIR}/deps"
   - mkdir ${DEPS_DIR} && cd ${DEPS_DIR}
 
