@@ -46,6 +46,7 @@ enum METRIC{IMAGE=0, GROUND=1, BOX3D=2};
 const int32_t MIN_HEIGHT[3]     = {40, 25, 25};     // minimum height for evaluated groundtruth/detections
 const int32_t MAX_OCCLUSION[3]  = {0, 1, 2};        // maximum occlusion level of the groundtruth used for evaluation
 const double  MAX_TRUNCATION[3] = {0.15, 0.3, 0.5}; // maximum truncation level of the groundtruth used for evaluation
+const int32_t MAX_Z[3]   = {-1, -1, -1};            // maximum distance from the ego-car
 
 // evaluated object classes
 enum CLASSES{CAR=0, PEDESTRIAN=1, CYCLIST=2, VAN=3, TRUCK=4, PERSON_SITTING=5, TRAM=6};
@@ -60,6 +61,16 @@ const double   MIN_OVERLAP[3][NUM_CLASS] = {{0.7, 0.5, 0.5, 0.7, 0.7, 0.5, 0.7},
 
 // no. of recall steps that should be evaluated (discretized)
 const double N_SAMPLE_PTS = 41;
+const int N_IOU_SAMPLE_PTS = 51;
+
+const int VIEWP_BINS = 8;
+const double VIEWP_OFFSET = 0.3927;
+
+const int MIN_DIST = 10;
+const int DELTA_DIST = 5;
+const int MAX_DIST = 60;
+
+const double MIN_SCORE = 0.001;
 
 // initialize class names
 void initGlobals () {
@@ -82,9 +93,14 @@ struct tPrData {
   double         similarity;  // orientation similarity
   int32_t        tp;          // true positives
   int32_t        fp;          // false positives
-  int32_t        fn;          // false negatives
+  int32_t        fn;          // false negatives+
+  vector<int32_t> pred_bins;
+  vector<int32_t> tp_bins;
   tPrData () :
-    similarity(0), tp(0), fp(0), fn(0) {}
+    similarity(0), tp(0), fp(0), fn(0) {
+      pred_bins.assign(VIEWP_BINS, 0);
+      tp_bins.assign(VIEWP_BINS, 0);
+    }
 };
 
 // holding bounding boxes for ground truth and detections
@@ -150,12 +166,16 @@ vector<tDetection> loadDetections(string file_name, bool &compute_aos,
     tDetection d;
     double trash;
     char str[255];
+    double log_score;
     if (fscanf(fp, "%s %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf",
                    str, &trash, &trash, &d.box.alpha, &d.box.x1, &d.box.y1,
                    &d.box.x2, &d.box.y2, &d.h, &d.w, &d.l, &d.t1, &d.t2, &d.t3,
-                   &d.ry, &d.thresh)==16) {
+                   &d.ry, &log_score)==16) {
 
       d.box.type = str;
+      d.thresh = exp(log_score);
+      if (d.thresh<MIN_SCORE)
+         continue;
       detections.push_back(d);
 
       // orientation=-10 is invalid, AOS is not evaluated if at least one orientation is invalid
@@ -216,21 +236,39 @@ vector<tGroundtruth> loadGroundtruth(string file_name,bool &success, vector<int>
   return groundtruth;
 }
 
-void saveStats (const vector<double> &precision, const vector<double> &aos, FILE *fp_det, FILE *fp_ori) {
+void saveStats (const vector<double> &precision, const vector<double> &aos, const vector<double> &recalls, const vector<double> &mppe, FILE *fp_det, FILE *fp_ori, FILE *fp_iou, FILE *fp_mppe) {
 
-  // save precision to file
+  // save precision to file if requested
   if(precision.empty())
     return;
-  for (int32_t i=0; i<precision.size(); i++)
-    fprintf(fp_det,"%f ",precision[i]);
-  fprintf(fp_det,"\n");
+
+  if(fp_det!=NULL){
+    for (int32_t i=0; i<precision.size(); i++)
+      fprintf(fp_det,"%f ",precision[i]);
+    fprintf(fp_det,"\n");
+  }
 
   // save orientation similarity, only if there were no invalid orientation entries in submission (alpha=-10)
-  if(aos.empty())
-    return;
-  for (int32_t i=0; i<aos.size(); i++)
-    fprintf(fp_ori,"%f ",aos[i]);
-  fprintf(fp_ori,"\n");
+  if(!aos.empty() && fp_ori!=NULL){
+    for (int32_t i=0; i<aos.size(); i++)
+      fprintf(fp_ori,"%f ",aos[i]);
+    fprintf(fp_ori,"\n");
+  }
+
+  // save recall vs IOU if requested
+  if(!recalls.empty() && fp_iou!=NULL){
+    for (int32_t i=0; i<recalls.size(); i++)
+      fprintf(fp_iou,"%f ",recalls[i]);
+    fprintf(fp_iou,"\n");
+  }
+
+  // save MPPE vs recall if requested
+  if(!mppe.empty() && fp_mppe!=NULL){
+    for (int32_t i=0; i<mppe.size(); i++)
+      fprintf(fp_mppe,"%f ",mppe[i]);
+    fprintf(fp_mppe,"\n");
+  }
+
 }
 
 /*=======================================================================
@@ -393,7 +431,10 @@ vector<double> getThresholds(vector<double> &v, double n_groundtruth){
   return t;
 }
 
-void cleanData(CLASSES current_class, const vector<tGroundtruth> &gt, const vector<tDetection> &det, vector<int32_t> &ignored_gt, vector<tGroundtruth> &dc, vector<int32_t> &ignored_det, int32_t &n_gt, DIFFICULTY difficulty){
+void cleanData(CLASSES current_class, const vector<tGroundtruth> &gt, const vector<tDetection> &det, vector<int32_t> &ignored_gt, vector<tGroundtruth> &dc, vector<int32_t> &ignored_det, int32_t &n_gt, DIFFICULTY difficulty, int fixed_max_z=-1){
+
+  // select max distance from ego-vehicle from either function parameter or global variable
+  int max_z = fixed_max_z>0 ? fixed_max_z : MAX_Z[difficulty];
 
   // extract ground truth bounding boxes for current evaluation class
   for(int32_t i=0;i<gt.size(); i++){
@@ -425,8 +466,11 @@ void cleanData(CLASSES current_class, const vector<tGroundtruth> &gt, const vect
     // ground truth is ignored, if occlusion, truncation exceeds the difficulty or ground truth is too small
     // (doesn't count as FN nor TP, although detections may be assigned)
     bool ignore = false;
-    if(gt[i].occlusion>MAX_OCCLUSION[difficulty] || gt[i].truncation>MAX_TRUNCATION[difficulty] || height<=MIN_HEIGHT[difficulty])
+    double distance = sqrt(pow(gt[i].t3,2)+pow(gt[i].t1,2));
+    if(gt[i].occlusion>MAX_OCCLUSION[difficulty] || gt[i].truncation>MAX_TRUNCATION[difficulty] || height<=MIN_HEIGHT[difficulty] ||
+      (distance>max_z && max_z>0)){
       ignore = true;
+    }
 
     // set ignored vector for ground truth
     // current class and not ignored (total no. of ground truth is detected for recall denominator)
@@ -475,15 +519,22 @@ tPrData computeStatistics(CLASSES current_class, const vector<tGroundtruth> &gt,
                           const vector<tDetection> &det, const vector<tGroundtruth> &dc,
                           const vector<int32_t> &ignored_gt, const vector<int32_t>  &ignored_det,
                           bool compute_fp, double (*boxoverlap)(tDetection, tGroundtruth, int32_t),
-                          METRIC metric, bool compute_aos=false, double thresh=0, bool debug=false){
+                          METRIC metric, bool compute_aos=false, double thresh=0, double fixed_iou=-1){
 
   tPrData stat = tPrData();
   const double NO_DETECTION = -10000000;
   vector<double> delta;            // holds angular difference for TPs (needed for AOS evaluation)
+  vector<int> pred_bin;
+  pred_bin.assign(VIEWP_BINS, 0);
+  vector<int> tp_bin;
+  tp_bin.assign(VIEWP_BINS, 0);
   vector<bool> assigned_detection; // holds wether a detection was assigned to a valid or ignored ground truth
   assigned_detection.assign(det.size(), false);
   vector<bool> ignored_threshold;
   ignored_threshold.assign(det.size(), false); // holds detections with a threshold lower than thresh if FP are computed
+
+  // select min IOU from either parameter or global variable
+  double min_overlap = fixed_iou>0 ? fixed_iou : MIN_OVERLAP[metric][current_class];
 
   // detections with a low score are ignored for computing precision (needs FP)
   if(compute_fp)
@@ -521,20 +572,20 @@ tPrData computeStatistics(CLASSES current_class, const vector<tGroundtruth> &gt,
       double overlap = boxoverlap(det[j], gt[i], -1);
 
       // for computing recall thresholds, the candidate with highest score is considered
-      if(!compute_fp && overlap>MIN_OVERLAP[metric][current_class] && det[j].thresh>valid_detection){
+      if(!compute_fp && overlap>min_overlap && det[j].thresh>valid_detection){
         det_idx         = j;
         valid_detection = det[j].thresh;
       }
 
       // for computing pr curve values, the candidate with the greatest overlap is considered
       // if the greatest overlap is an ignored detection (min_height), the overlapping detection is used
-      else if(compute_fp && overlap>MIN_OVERLAP[metric][current_class] && (overlap>max_overlap || assigned_ignored_det) && ignored_det[j]==0){
+      else if(compute_fp && overlap>min_overlap && (overlap>max_overlap || assigned_ignored_det) && ignored_det[j]==0){
         max_overlap     = overlap;
         det_idx         = j;
         valid_detection = 1;
         assigned_ignored_det = false;
       }
-      else if(compute_fp && overlap>MIN_OVERLAP[metric][current_class] && valid_detection==NO_DETECTION && ignored_det[j]==1){
+      else if(compute_fp && overlap>min_overlap && valid_detection==NO_DETECTION && ignored_det[j]==1){
         det_idx              = j;
         valid_detection      = 1;
         assigned_ignored_det = true;
@@ -562,8 +613,30 @@ tPrData computeStatistics(CLASSES current_class, const vector<tGroundtruth> &gt,
       stat.v.push_back(det[det_idx].thresh);
 
       // compute angular difference of detection and ground truth if valid detection orientation was provided
-      if(compute_aos)
+      if(compute_aos){
         delta.push_back(gt[i].box.alpha - det[det_idx].box.alpha);
+
+        // MPPE computation
+        double positive_gt_angle = gt[i].box.alpha;
+        positive_gt_angle += positive_gt_angle<0 ? 2*M_PI : 0;
+        int gt_bin = std::floor((positive_gt_angle+VIEWP_OFFSET)/(2*M_PI/VIEWP_BINS));
+
+        double positive_det_angle = det[det_idx].box.alpha;
+        positive_det_angle += positive_det_angle<0 ? 2*M_PI : 0;
+        int det_bin = std::floor((positive_det_angle+VIEWP_OFFSET)/(2*M_PI/VIEWP_BINS));
+
+        if (det_bin>=VIEWP_BINS)
+            det_bin = 0;
+
+        if (gt_bin>=VIEWP_BINS)
+            gt_bin = 0;
+
+        assert(det_bin<VIEWP_BINS && det_bin>=0);
+        assert(gt_bin<VIEWP_BINS && gt_bin>=0);
+
+        pred_bin[det_bin]++;
+        tp_bin[det_bin] += (gt_bin == det_bin) ? 1 : 0;
+      }
 
       // clean up
       assigned_detection[det_idx] = true;
@@ -596,7 +669,7 @@ tPrData computeStatistics(CLASSES current_class, const vector<tGroundtruth> &gt,
 
         // compute overlap and assign to stuff area, if overlap exceeds class specific value
         double overlap = boxoverlap(det[j], dc[i], 0);
-        if(overlap>MIN_OVERLAP[metric][current_class]){
+        if(overlap>min_overlap){
           assigned_detection[j] = true;
           nstuff++;
         }
@@ -620,12 +693,20 @@ tPrData computeStatistics(CLASSES current_class, const vector<tGroundtruth> &gt,
       assert(delta.size()==stat.tp);
 
       // get the mean orientation similarity for this image
-      if(stat.tp>0 || stat.fp>0)
+      if(stat.tp>0 || stat.fp>0){
         stat.similarity = accumulate(tmp.begin(), tmp.end(), 0.0);
-
+        for (int vp=0; vp<VIEWP_BINS; vp++){
+          stat.tp_bins[vp] = tp_bin[vp];
+          stat.pred_bins[vp] = pred_bin[vp];
+        }
       // there was neither a FP nor a TP, so the similarity is ignored in the evaluation
-      else
+      }else{
         stat.similarity = -1;
+        for (int vp=0; vp<VIEWP_BINS; vp++){
+          stat.tp_bins[vp] = -1;
+          stat.pred_bins[vp] = -1;
+        }
+      }
     }
   }
   return stat;
@@ -635,12 +716,14 @@ tPrData computeStatistics(CLASSES current_class, const vector<tGroundtruth> &gt,
 EVALUATE CLASS-WISE
 =======================================================================*/
 
-bool eval_class (FILE *fp_det, FILE *fp_ori, CLASSES current_class,
+bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
                 const vector< vector<tGroundtruth> > &groundtruth,
                 const vector< vector<tDetection> > &detections, bool compute_aos,
                 double (*boxoverlap)(tDetection, tGroundtruth, int32_t),
-                vector<double> &precision, vector<double> &aos,
-                DIFFICULTY difficulty, METRIC metric) {
+                vector<double> &precision, vector<double> &aos, vector<double> &mppe,
+                vector<double> &recalls_vector, const DIFFICULTY difficulty,
+                const METRIC metric, FILE *fp_iour=NULL, FILE *fp_mppe=NULL,
+                int fixed_max_z=-1) {
 
   assert(groundtruth.size() == detections.size());
 
@@ -659,7 +742,7 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, CLASSES current_class,
     vector<tGroundtruth> dc;
 
     // only evaluate objects of current class and ignore occluded, truncated objects
-    cleanData(current_class, groundtruth[i], detections[i], i_gt, dc, i_det, n_gt, difficulty);
+    cleanData(current_class, groundtruth[i], detections[i], i_gt, dc, i_det, n_gt, difficulty, fixed_max_z);
     ignored_gt.push_back(i_gt);
     ignored_det.push_back(i_det);
     dontcare.push_back(dc);
@@ -680,52 +763,165 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, CLASSES current_class,
   vector<tPrData> pr;
   pr.assign(thresholds.size(),tPrData());
 
+  // compute TP,FP,FN for relevant IOUs
+  vector<tPrData> all;
+  all.assign(N_IOU_SAMPLE_PTS, tPrData());
+
   std::cout << "Computing statistics" << std::endl;
+
   for (int32_t i=0; i<groundtruth.size(); i++){
+
+    assert(thresholds.size()-1<100);
+
+    // for all IOUs do:
+    for(int j=0; j<N_IOU_SAMPLE_PTS; j++){
+      double iou = 0.5+(0.5/(float)(N_IOU_SAMPLE_PTS-1))*j;
+      tPrData tmp = tPrData();
+      tmp  = computeStatistics(current_class, groundtruth[i], detections[i], dontcare[i],
+                              ignored_gt[i], ignored_det[i], true, boxoverlap, metric,
+                              compute_aos, thresholds[thresholds.size()-1], iou);
+
+      all[j].tp += tmp.tp;
+      all[j].fn += tmp.fn;
+    }
 
     // for all scores/recall thresholds do:
     for(int32_t t=0; t<thresholds.size(); t++){
       tPrData tmp = tPrData();
       tmp = computeStatistics(current_class, groundtruth[i], detections[i], dontcare[i],
                               ignored_gt[i], ignored_det[i], true, boxoverlap, metric,
-                              compute_aos, thresholds[t], t==38);
+                              compute_aos, thresholds[t]);
 
       // add no. of TP, FP, FN, AOS for current frame to total evaluation for current threshold
       pr[t].tp += tmp.tp;
       pr[t].fp += tmp.fp;
       pr[t].fn += tmp.fn;
-      if(tmp.similarity!=-1)
+      if(tmp.similarity!=-1){
         pr[t].similarity += tmp.similarity;
+        for (int vp=0; vp<VIEWP_BINS; vp++){
+          if (tmp.tp_bins[vp] != -1 && tmp.pred_bins[vp] != -1){
+            pr[t].tp_bins[vp] += tmp.tp_bins[vp];
+            pr[t].pred_bins[vp] += tmp.pred_bins[vp];
+          }
+        }
+      }
     }
+  }
+
+  for(float j=0; j<N_IOU_SAMPLE_PTS; j++){
+    recalls_vector.push_back( all[j].tp / (double)(all[j].tp + all[j].fn));
   }
 
   // compute recall, precision and AOS
   vector<double> recall;
   precision.assign(N_SAMPLE_PTS, 0);
-  if(compute_aos)
+  if(compute_aos){
     aos.assign(N_SAMPLE_PTS, 0);
+    mppe.assign(N_SAMPLE_PTS, 0);
+  }
+
+  // compute MPPE
   double r=0;
   for (int32_t i=0; i<thresholds.size(); i++){
     r = pr[i].tp/(double)(pr[i].tp + pr[i].fn);
     recall.push_back(r);
     precision[i] = pr[i].tp/(double)(pr[i].tp + pr[i].fp);
-    if(compute_aos)
+    if(compute_aos){
       aos[i] = pr[i].similarity/(double)(pr[i].tp + pr[i].fp);
+      int non_zero_bins = 0;
+      for (int vp=0; vp<VIEWP_BINS; vp++){
+        if (pr[i].pred_bins[vp] > 0){
+          non_zero_bins++;
+          mppe[i] += (pr[i].tp_bins[vp]/(double)pr[i].pred_bins[vp]);
+        }
+      }
+      if (non_zero_bins){
+        mppe[i] /= (double)non_zero_bins;
+      }else{
+        mppe[i] = 0;
+      }
+    }
   }
 
-  // filter precision and AOS using max_{i..end}(precision)
+  // filter precision, AOS and MPPE using max_{i..end}(precision)
   for (int32_t i=0; i<thresholds.size(); i++){
     precision[i] = *max_element(precision.begin()+i, precision.end());
-    if(compute_aos)
+    if(compute_aos){
       aos[i] = *max_element(aos.begin()+i, aos.end());
+      mppe[i] = *max_element(mppe.begin()+i, mppe.end());
+    }
   }
 
   // save statisics and finish with success
-  saveStats(precision, aos, fp_det, fp_ori);
-    return true;
+  if (fixed_max_z<0) saveStats(precision, aos, recalls_vector, mppe, fp_det, fp_ori, fp_iour, fp_mppe);
+  cout << "stats computed " << endl;
+  return true;
 }
 
-void saveAndPlotPlots(string dir_name,string file_name,string obj_type,vector<double> vals[],bool is_aos){
+void saveAndPlotPlotsDist(string dir_name,string file_name,string obj_type,vector<double> vals[]){
+
+  char command[1024];
+
+  // save plot data to file
+  FILE *fp = fopen((dir_name + "/" + file_name + ".txt").c_str(),"w");
+  printf("save %s\n", (dir_name + "/" + file_name + ".txt").c_str());
+  for(int dist=0; dist<vals[0].size(); dist++){
+
+    fprintf(fp,"%f %f %f %f\n",(float)dist*DELTA_DIST+MIN_DIST,vals[0][dist],vals[1][dist],vals[2][dist]);
+  }
+  fclose(fp);
+
+  // create png + eps
+  for (int32_t j=0; j<2; j++) {
+
+    // open file
+    FILE *fp = fopen((dir_name + "/" + file_name + ".gp").c_str(),"w");
+
+    // save gnuplot instructions
+    if (j==0) {
+      fprintf(fp,"set term png size 450,315 font \"Helvetica\" 11\n");
+      fprintf(fp,"set output \"%s.png\"\n",file_name.c_str());
+    } else {
+      fprintf(fp,"set term postscript eps enhanced color font \"Helvetica\" 20\n");
+      fprintf(fp,"set output \"%s.eps\"\n",file_name.c_str());
+    }
+
+    // set labels and ranges
+    fprintf(fp,"set size ratio 0.7\n");
+    fprintf(fp,"set xrange [%d:%d]\n", MIN_DIST, MAX_DIST);
+    fprintf(fp,"set yrange [0:1]\n");
+    fprintf(fp,"set xlabel \"Max distance\"\n");
+    fprintf(fp,"set ylabel \"Recall\"\n");
+    obj_type[0] = toupper(obj_type[0]);
+    fprintf(fp,"set title \"%s\"\n",obj_type.c_str());
+
+    // line width
+    int32_t   lw = 5;
+    if (j==0) lw = 3;
+
+    // plot error curve
+    fprintf(fp,"plot ");
+    fprintf(fp,"\"%s.txt\" using 1:2 title 'Easy' with lines ls 1 lw %d,",file_name.c_str(),lw);
+    fprintf(fp,"\"%s.txt\" using 1:3 title 'Moderate' with lines ls 2 lw %d,",file_name.c_str(),lw);
+    fprintf(fp,"\"%s.txt\" using 1:4 title 'Hard' with lines ls 3 lw %d",file_name.c_str(),lw);
+
+    // close file
+    fclose(fp);
+
+    // run gnuplot => create png + eps
+    sprintf(command,"cd %s; gnuplot %s",dir_name.c_str(),(file_name + ".gp").c_str());
+    system(command);
+  }
+  // create pdf and crop
+  sprintf(command,"cd %s; ps2pdf %s.eps %s_large.pdf",dir_name.c_str(),file_name.c_str(),file_name.c_str());
+  system(command);
+  sprintf(command,"cd %s; pdfcrop %s_large.pdf %s.pdf",dir_name.c_str(),file_name.c_str(),file_name.c_str());
+  system(command);
+  sprintf(command,"cd %s; rm %s_large.pdf",dir_name.c_str(),file_name.c_str());
+  system(command);
+}
+
+void saveAndPlotPlots(string dir_name,string file_name,string obj_type,vector<double> vals[],bool is_aos,bool is_mppe=false){
 
   char command[1024];
 
@@ -756,7 +952,8 @@ void saveAndPlotPlots(string dir_name,string file_name,string obj_type,vector<do
     fprintf(fp,"set xrange [0:1]\n");
     fprintf(fp,"set yrange [0:1]\n");
     fprintf(fp,"set xlabel \"Recall\"\n");
-    if (!is_aos) fprintf(fp,"set ylabel \"Precision\"\n");
+    if (is_mppe) fprintf(fp,"set ylabel \"MPPE\"\n");
+    else if (!is_aos) fprintf(fp,"set ylabel \"Precision\"\n");
     else         fprintf(fp,"set ylabel \"Orientation Similarity\"\n");
     obj_type[0] = toupper(obj_type[0]);
     fprintf(fp,"set title \"%s\"\n",obj_type.c_str());
@@ -788,7 +985,71 @@ void saveAndPlotPlots(string dir_name,string file_name,string obj_type,vector<do
   system(command);
 }
 
-bool eval(string result_sha,string input_dataset){
+void saveAndPlotIOUR(string dir_name,string file_name,string obj_type,vector<double> vals[]){
+
+  char command[1024];
+
+  // save plot data to file
+  FILE *fp = fopen((dir_name + "/" + file_name + ".txt").c_str(),"w");
+  printf("save %s\n", (dir_name + "/" + file_name + ".txt").c_str());
+  for (int32_t i=0; i<N_IOU_SAMPLE_PTS; i++){
+    double iou = 0.5+(0.5/(float)(N_IOU_SAMPLE_PTS-1))*i;
+    fprintf(fp,"%f %f %f %f\n",iou,vals[0][i],vals[1][i],vals[2][i]);
+  }
+  fclose(fp);
+
+  // create png + eps
+  for (int32_t j=0; j<2; j++) {
+
+    // open file
+    FILE *fp = fopen((dir_name + "/" + file_name + ".gp").c_str(),"w");
+
+    // save gnuplot instructions
+    if (j==0) {
+      fprintf(fp,"set term png size 450,315 font \"Helvetica\" 11\n");
+      fprintf(fp,"set output \"%s.png\"\n",file_name.c_str());
+    } else {
+      fprintf(fp,"set term postscript eps enhanced color font \"Helvetica\" 20\n");
+      fprintf(fp,"set output \"%s.eps\"\n",file_name.c_str());
+    }
+
+    // set labels and ranges
+    fprintf(fp,"set size ratio 0.7\n");
+    fprintf(fp,"set xrange [0.5:1]\n");
+    fprintf(fp,"set yrange [0:1]\n");
+    fprintf(fp,"set xlabel \"IoU\"\n");
+    fprintf(fp,"set ylabel \"Recall\"\n");
+    obj_type[0] = toupper(obj_type[0]);
+    fprintf(fp,"set title \"%s\"\n",obj_type.c_str());
+
+    // line width
+    int32_t   lw = 5;
+    if (j==0) lw = 3;
+
+    // plot error curve
+    fprintf(fp,"plot ");
+    fprintf(fp,"\"%s.txt\" using 1:2 title 'Easy' with lines ls 1 lw %d,",file_name.c_str(),lw);
+    fprintf(fp,"\"%s.txt\" using 1:3 title 'Moderate' with lines ls 2 lw %d,",file_name.c_str(),lw);
+    fprintf(fp,"\"%s.txt\" using 1:4 title 'Hard' with lines ls 3 lw %d",file_name.c_str(),lw);
+
+    // close file
+    fclose(fp);
+
+    // run gnuplot => create png + eps
+    sprintf(command,"cd %s; gnuplot %s",dir_name.c_str(),(file_name + ".gp").c_str());
+    system(command);
+  }
+
+  // create pdf and crop
+  sprintf(command,"cd %s; ps2pdf %s.eps %s_large.pdf",dir_name.c_str(),file_name.c_str(),file_name.c_str());
+  system(command);
+  sprintf(command,"cd %s; pdfcrop %s_large.pdf %s.pdf",dir_name.c_str(),file_name.c_str(),file_name.c_str());
+  system(command);
+  sprintf(command,"cd %s; rm %s_large.pdf",dir_name.c_str(),file_name.c_str());
+  system(command);
+}
+
+bool eval(string result_sha,string input_dataset,int analyze_distance){
 
   // set some global parameters
   initGlobals();
@@ -893,7 +1154,7 @@ bool eval(string result_sha,string input_dataset){
   std::cout << "  done." << std::endl;
 
   // holds pointers for result files
-  FILE *fp_det=0, *fp_ori=0;
+  FILE *fp_det=0, *fp_ori=0, *fp_iour=0, *fp_mppe=0;
 
   // eval image 2D bounding boxes
   for (int c = 0; c < NUM_CLASS; c++) {
@@ -901,22 +1162,48 @@ bool eval(string result_sha,string input_dataset){
     if (eval_image[c]) {
       cout << "Starting 2D evaluation (" << CLASS_NAMES[c] << ") ..." << endl;
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection.txt").c_str(), "w");
+      fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour.txt").c_str(), "w");
       if(compute_aos)
         fp_ori = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_orientation.txt").c_str(),"w");
-      vector<double> precision[3], aos[3];
-      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[0], aos[0], EASY, IMAGE)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[1], aos[1], MODERATE, IMAGE)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[2], aos[2], HARD, IMAGE)) {
+        fp_mppe = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_mppe.txt").c_str(), "w");
+      vector<double> precision[3], aos[3], mppe[3], recalls[3];
+      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, IMAGE, fp_iour, fp_mppe)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, IMAGE, fp_iour, fp_mppe)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, IMAGE, fp_iour, fp_mppe)) {
         cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
         return false;
       }
       fclose(fp_det);
+      fclose(fp_iour);
       saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_detection", CLASS_NAMES[c], precision, 0);
+      saveAndPlotIOUR(plot_dir, CLASS_NAMES[c] + "_iour", CLASS_NAMES[c], recalls);
       if(compute_aos){
         saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_orientation", CLASS_NAMES[c], aos, 1);
+        saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_mppe", CLASS_NAMES[c], mppe, 1, true);
         fclose(fp_ori);
       }
-      cout << "  done." << endl;
+
+      // Recall vs distance
+      if (analyze_distance){
+        vector<double> recall_per_distance[3];
+        for(int dist=MIN_DIST; dist<=MAX_DIST; dist+=DELTA_DIST){
+          vector<double> precisionD[3], aosD[3], mppeD[3], recallsD[3];
+          if(   !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[0], aosD[0], mppeD[0], recallsD[0], EASY, IMAGE, NULL, NULL, dist)
+             || !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[1], aosD[1], mppeD[1], recallsD[1], MODERATE, IMAGE, NULL, NULL, dist)
+             || !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[2], aosD[2], mppeD[2], recallsD[2], HARD, IMAGE, NULL, NULL, dist)) {
+            cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
+            return false;
+          }
+          for (int idx=0; idx<3; idx++){
+            // TODO: Improve column indexing
+            // idx=0 (Car) -> required IoU=0.7: 0.5+20*((1-0.5)/(N_IOU_SAMPLE_PTS-1))
+            // idx>0 (Pedestrian, Cyclist) -> required IoU=0.5: 0.5+0
+            recall_per_distance[idx].push_back(recallsD[idx][idx==0?20:0]); //TODO TODO TODO
+          }
+        }
+        saveAndPlotPlotsDist(plot_dir, CLASS_NAMES[c] + "_dist", CLASS_NAMES[c], recall_per_distance);
+        cout << "  done." << endl;
+      }
     }
   }
 
@@ -929,10 +1216,11 @@ bool eval(string result_sha,string input_dataset){
     if (eval_ground[c]) {
       cout << "Starting bird's eye evaluation (" << CLASS_NAMES[c] << ") ...";
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection_ground.txt").c_str(), "w");
-      vector<double> precision[3], aos[3];
-      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[0], aos[0], EASY, GROUND)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[1], aos[1], MODERATE, GROUND)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[2], aos[2], HARD, GROUND)) {
+      fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour_ground.txt").c_str(), "w");
+      vector<double> precision[3], aos[3], mppe[3], recalls[3];
+      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, GROUND, fp_iour)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, GROUND, fp_iour)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, GROUND, fp_iour)) {
         cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
         return false;
       }
@@ -948,10 +1236,11 @@ bool eval(string result_sha,string input_dataset){
     if (eval_3d[c]) {
       cout << "Starting 3D evaluation (" << CLASS_NAMES[c] << ") ..." << endl;
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection_3d.txt").c_str(), "w");
-      vector<double> precision[3], aos[3];
-      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[0], aos[0], EASY, BOX3D)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[1], aos[1], MODERATE, BOX3D)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[2], aos[2], HARD, BOX3D)) {
+      fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour_3d.txt").c_str(), "w");
+      vector<double> precision[3], aos[3], mppe[3], recalls[3];
+      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, BOX3D, fp_iour)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, BOX3D, fp_iour)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, BOX3D, fp_iour)) {
         cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
         return false;
       }
@@ -967,9 +1256,8 @@ bool eval(string result_sha,string input_dataset){
 
 int32_t main (int32_t argc,char *argv[]) {
 
-  // we need 2 or 4 arguments!
-  if (argc!=3) {
-    cout << "Usage: ./eval_detection result_sha val_dataset" << endl;
+  if (argc<3 || argc>4) {
+    cout << "Usage: ./eval_detection result_sha val_dataset [analyze_distance (default=0)]" << endl;
     return 1;
   }
 
@@ -977,10 +1265,16 @@ int32_t main (int32_t argc,char *argv[]) {
   string result_sha = argv[1];
   string input_dataset = argv[2];
 
+  int analyze_distance;
+  if (argc==4){
+    string third_parameter = argv[3];
+    analyze_distance = atoi(third_parameter.c_str());
+  }
+
   std:cout << "Starting evaluation..." << std::endl;
 
   // run evaluation
-  if(eval(result_sha,input_dataset)){
+  if(eval(result_sha,input_dataset,analyze_distance)){
     cout << "Evaluation finished successfully" << endl;
   }else{
     cout << "Something happened..." << endl;
