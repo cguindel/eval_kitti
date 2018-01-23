@@ -756,6 +756,10 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
       v.push_back(pr_tmp.v[j]);
   }
 
+  if(n_gt<=0){
+    return false;
+  }
+
   // get scores that must be evaluated for recall discretization
   thresholds = getThresholds(v, n_gt);
 
@@ -1159,6 +1163,10 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
   // eval image 2D bounding boxes
   for (int c = 0; c < NUM_CLASS; c++) {
     CLASSES cls = (CLASSES)c;
+    if (count_gt[c]<=0){
+      std::cout << "No ground-truth samples of " << CLASS_NAMES[c] << " found" << std::endl;
+      continue;
+    }
     if (eval_image[c]) {
       cout << "Starting 2D evaluation (" << CLASS_NAMES[c] << ") ..." << endl;
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection.txt").c_str(), "w");
@@ -1204,6 +1212,8 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
         saveAndPlotPlotsDist(plot_dir, CLASS_NAMES[c] + "_dist", CLASS_NAMES[c], recall_per_distance);
         cout << "  done." << endl;
       }
+    }else{
+      std::cout << "No detections of " << CLASS_NAMES[c] << " found" << std::endl;
     }
   }
 
