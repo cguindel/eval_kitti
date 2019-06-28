@@ -723,7 +723,7 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
                 vector<double> &precision, vector<double> &aos, vector<double> &mppe,
                 vector<double> &recalls_vector, const DIFFICULTY difficulty,
                 const METRIC metric, FILE *fp_iour=NULL, FILE *fp_mppe=NULL,
-                int fixed_max_z=-1) {
+                int analyze_recall=0, int fixed_max_z=-1) {
 
   assert(groundtruth.size() == detections.size());
 
@@ -769,7 +769,9 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
 
   // compute TP,FP,FN for relevant IOUs
   vector<tPrData> all;
-  all.assign(N_IOU_SAMPLE_PTS, tPrData());
+  if (analyze_recall){
+    all.assign(N_IOU_SAMPLE_PTS, tPrData());
+  }
 
   std::cout << "Computing statistics" << std::endl;
 
@@ -777,16 +779,19 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
 
     assert(thresholds.size()-1<100);
 
-    // for all IOUs do:
-    for(int j=0; j<N_IOU_SAMPLE_PTS; j++){
-      double iou = 0.5+(0.5/(float)(N_IOU_SAMPLE_PTS-1))*j;
-      tPrData tmp = tPrData();
-      tmp  = computeStatistics(current_class, groundtruth[i], detections[i], dontcare[i],
-                              ignored_gt[i], ignored_det[i], true, boxoverlap, metric,
-                              compute_aos, thresholds[thresholds.size()-1], iou);
+    if (analyze_recall){
+      // for all IOUs do:
+      for(int j=0; j<N_IOU_SAMPLE_PTS; j++){
+        //double iou = 0.5+(0.5/(float)(N_IOU_SAMPLE_PTS-1))*j;
+        double iou = (1.0/(float)(N_IOU_SAMPLE_PTS-1))*j;
+        tPrData tmp = tPrData();
+        tmp  = computeStatistics(current_class, groundtruth[i], detections[i], dontcare[i],
+                                ignored_gt[i], ignored_det[i], true, boxoverlap, metric,
+                                compute_aos, thresholds[thresholds.size()-1], iou);
 
-      all[j].tp += tmp.tp;
-      all[j].fn += tmp.fn;
+        all[j].tp += tmp.tp;
+        all[j].fn += tmp.fn;
+      }
     }
 
     // for all scores/recall thresholds do:
@@ -812,8 +817,10 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
     }
   }
 
-  for(float j=0; j<N_IOU_SAMPLE_PTS; j++){
-    recalls_vector.push_back( all[j].tp / (double)(all[j].tp + all[j].fn));
+  if (analyze_recall){
+    for(float j=0; j<N_IOU_SAMPLE_PTS; j++){
+      recalls_vector.push_back(all[j].tp / (double)(all[j].tp + all[j].fn));
+    }
   }
 
   // compute recall, precision and AOS
@@ -858,7 +865,7 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
 
   // save statisics and finish with success
   if (fixed_max_z<0) saveStats(precision, aos, recalls_vector, mppe, fp_det, fp_ori, fp_iour, fp_mppe);
-  cout << "stats computed " << endl;
+  cout << "Stats computed " << endl;
   return true;
 }
 
@@ -997,7 +1004,10 @@ void saveAndPlotIOUR(string dir_name,string file_name,string obj_type,vector<dou
   FILE *fp = fopen((dir_name + "/" + file_name + ".txt").c_str(),"w");
   printf("save %s\n", (dir_name + "/" + file_name + ".txt").c_str());
   for (int32_t i=0; i<N_IOU_SAMPLE_PTS; i++){
-    double iou = 0.5+(0.5/(float)(N_IOU_SAMPLE_PTS-1))*i;
+    // For x-axis range [0.5, 1]:
+    //double iou = 0.5+(0.5/(float)(N_IOU_SAMPLE_PTS-1))*i;
+    // For x-axis range [0, 1]:
+    double iou = (1.0/(float)(N_IOU_SAMPLE_PTS-1))*i;
     fprintf(fp,"%f %f %f %f\n",iou,vals[0][i],vals[1][i],vals[2][i]);
   }
   fclose(fp);
@@ -1019,7 +1029,10 @@ void saveAndPlotIOUR(string dir_name,string file_name,string obj_type,vector<dou
 
     // set labels and ranges
     fprintf(fp,"set size ratio 0.7\n");
-    fprintf(fp,"set xrange [0.5:1]\n");
+    // For x-axis range [0.5, 1]:
+    //fprintf(fp,"set xrange [0.5:1]\n");
+    // For x-axis range [0, 1]:
+    fprintf(fp,"set xrange [0.1:1]\n");
     fprintf(fp,"set yrange [0:1]\n");
     fprintf(fp,"set xlabel \"IoU\"\n");
     fprintf(fp,"set ylabel \"Recall\"\n");
@@ -1053,7 +1066,7 @@ void saveAndPlotIOUR(string dir_name,string file_name,string obj_type,vector<dou
   system(command);
 }
 
-bool eval(string result_sha,string input_dataset,int analyze_distance){
+bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_distance){
 
   // set some global parameters
   initGlobals();
@@ -1175,16 +1188,18 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
         fp_ori = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_orientation.txt").c_str(),"w");
         fp_mppe = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_mppe.txt").c_str(), "w");
       vector<double> precision[3], aos[3], mppe[3], recalls[3];
-      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, IMAGE, fp_iour, fp_mppe)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, IMAGE, fp_iour, fp_mppe)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, IMAGE, fp_iour, fp_mppe)) {
+      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, IMAGE, fp_iour, fp_mppe, analyze_recall)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, IMAGE, fp_iour, fp_mppe, analyze_recall)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, IMAGE, fp_iour, fp_mppe, analyze_recall)) {
         cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
         return false;
       }
       fclose(fp_det);
       fclose(fp_iour);
       saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_detection", CLASS_NAMES[c], precision, 0);
-      saveAndPlotIOUR(plot_dir, CLASS_NAMES[c] + "_iour", CLASS_NAMES[c], recalls);
+      if (analyze_recall){
+        saveAndPlotIOUR(plot_dir, CLASS_NAMES[c] + "_iour", CLASS_NAMES[c], recalls);
+      }
       if(compute_aos){
         saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_orientation", CLASS_NAMES[c], aos, 1);
         saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_mppe", CLASS_NAMES[c], mppe, 1, true);
@@ -1196,9 +1211,9 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
         vector<double> recall_per_distance[3];
         for(int dist=MIN_DIST; dist<=MAX_DIST; dist+=DELTA_DIST){
           vector<double> precisionD[3], aosD[3], mppeD[3], recallsD[3];
-          if(   !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[0], aosD[0], mppeD[0], recallsD[0], EASY, IMAGE, NULL, NULL, dist)
-             || !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[1], aosD[1], mppeD[1], recallsD[1], MODERATE, IMAGE, NULL, NULL, dist)
-             || !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[2], aosD[2], mppeD[2], recallsD[2], HARD, IMAGE, NULL, NULL, dist)) {
+          if(   !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[0], aosD[0], mppeD[0], recallsD[0], EASY, IMAGE, NULL, NULL, analyze_recall, dist)
+             || !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[1], aosD[1], mppeD[1], recallsD[1], MODERATE, IMAGE, NULL, NULL, analyze_recall, dist)
+             || !eval_class(NULL, NULL, cls, groundtruth, detections, compute_aos, imageBoxOverlap, precisionD[2], aosD[2], mppeD[2], recallsD[2], HARD, IMAGE, NULL, NULL, analyze_recall, dist)) {
             cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
             return false;
           }
@@ -1213,7 +1228,7 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
         cout << "  done." << endl;
       }
     }else{
-      std::cout << "No detections of " << CLASS_NAMES[c] << " found" << std::endl;
+      std::cout << "Found no " << CLASS_NAMES[c] << " detections" << std::endl;
     }
   }
 
@@ -1223,19 +1238,26 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
   // eval bird's eye view bounding boxes
   for (int c = 0; c < NUM_CLASS; c++) {
     CLASSES cls = (CLASSES)c;
+    if (count_gt[c]<=0){
+      std::cout << "Found no " << CLASS_NAMES[c] << " ground-truth samples" << std::endl;
+      continue;
+    }
     if (eval_ground[c]) {
       cout << "Starting bird's eye evaluation (" << CLASS_NAMES[c] << ") ...";
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection_ground.txt").c_str(), "w");
       fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour_ground.txt").c_str(), "w");
       vector<double> precision[3], aos[3], mppe[3], recalls[3];
-      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, GROUND, fp_iour)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, GROUND, fp_iour)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, GROUND, fp_iour)) {
+      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, GROUND, fp_iour, NULL, analyze_recall)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, GROUND, fp_iour, NULL, analyze_recall)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, groundBoxOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, GROUND, fp_iour, NULL, analyze_recall)) {
         cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
         return false;
       }
       fclose(fp_det);
       saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_detection_ground", CLASS_NAMES[c], precision, 0);
+      if (analyze_recall){
+        saveAndPlotIOUR(plot_dir, CLASS_NAMES[c] + "_iour_ground", CLASS_NAMES[c], recalls);
+      }
       cout << "  done." << endl;
     }
   }
@@ -1243,19 +1265,26 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
   // eval 3D bounding boxes
   for (int c = 0; c < NUM_CLASS; c++) {
     CLASSES cls = (CLASSES)c;
+    if (count_gt[c]<=0){
+      std::cout << "Found no " << CLASS_NAMES[c] << " ground-truth samples" << std::endl;
+      continue;
+    }
     if (eval_3d[c]) {
       cout << "Starting 3D evaluation (" << CLASS_NAMES[c] << ") ..." << endl;
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection_3d.txt").c_str(), "w");
       fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour_3d.txt").c_str(), "w");
       vector<double> precision[3], aos[3], mppe[3], recalls[3];
-      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, BOX3D, fp_iour)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, BOX3D, fp_iour)
-         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, BOX3D, fp_iour)) {
+      if(   !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[0], aos[0], mppe[0], recalls[0], EASY, BOX3D, fp_iour, NULL, analyze_recall)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[1], aos[1], mppe[1], recalls[1], MODERATE, BOX3D, fp_iour, NULL, analyze_recall)
+         || !eval_class(fp_det, fp_ori, cls, groundtruth, detections, compute_aos, box3DOverlap, precision[2], aos[2], mppe[2], recalls[2], HARD, BOX3D, fp_iour, NULL, analyze_recall)) {
         cout << CLASS_NAMES[c].c_str() << " evaluation failed." << endl;
         return false;
       }
       fclose(fp_det);
       saveAndPlotPlots(plot_dir, CLASS_NAMES[c] + "_detection_3d", CLASS_NAMES[c], precision, 0);
+      if (analyze_recall){
+        saveAndPlotIOUR(plot_dir, CLASS_NAMES[c] + "_iour_3d", CLASS_NAMES[c], recalls);
+      }
       cout << "  done." << endl;
     }
   }
@@ -1267,7 +1296,7 @@ bool eval(string result_sha,string input_dataset,int analyze_distance){
 int32_t main (int32_t argc,char *argv[]) {
 
   if (argc<3 || argc>4) {
-    cout << "Usage: ./eval_detection result_sha val_dataset [analyze_distance (default=0)]" << endl;
+    cout << "Usage: ./eval_detection result_sha val_dataset [analyze_recall (default=0)] [analyze_distance (default=0)]" << endl;
     return 1;
   }
 
@@ -1275,16 +1304,24 @@ int32_t main (int32_t argc,char *argv[]) {
   string result_sha = argv[1];
   string input_dataset = argv[2];
 
-  int analyze_distance;
-  if (argc==4){
+  // Obtain Recall vs IOU graph
+  int analyze_recall=0;
+  if (argc==4 || argc==5){
     string third_parameter = argv[3];
-    analyze_distance = atoi(third_parameter.c_str());
+    analyze_recall = atoi(third_parameter.c_str());
+  }
+
+  // Obtain Recall vs distance graph
+  int analyze_distance=0;
+  if (argc==5){
+    string fourth_parameter = argv[4];
+    analyze_distance = atoi(fourth_parameter.c_str());
   }
 
   std:cout << "Starting evaluation..." << std::endl;
 
   // run evaluation
-  if(eval(result_sha,input_dataset,analyze_distance)){
+  if(eval(result_sha,input_dataset,analyze_recall,analyze_distance)){
     cout << "Evaluation finished successfully" << endl;
   }else{
     cout << "Something happened..." << endl;

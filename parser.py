@@ -4,10 +4,13 @@ import sys
 import os
 import numpy as np
 
-# classes = ['car', 'pedestrian', 'cyclist', 'van', 'truck', 'person_sitting', 'tram']
-classes = ['car', 'pedestrian', 'cyclist']
-difficulties = ['easy', 'moderate', 'hard']
-params = ['detection', 'orientation','iour','mppe']
+# CLASSES = ['car', 'pedestrian', 'cyclist', 'van', 'truck', 'person_sitting', 'tram']
+CLASSES = ['car', 'pedestrian', 'cyclist']
+
+# PARAMS = ['detection', 'orientation', 'iour', 'mppe']
+PARAMS = ['detection', 'orientation']
+
+DIFFICULTIES = ['easy', 'moderate', 'hard']
 
 eval_type = ''
 
@@ -20,8 +23,9 @@ if len(sys.argv)==3:
 result_sha = sys.argv[1]
 txt_dir = os.path.join('build','results', result_sha)
 
-for class_name in classes:
-    for param in params:
+for class_name in CLASSES:
+    for param in PARAMS:
+        print("--{:s} {:s}--".format(class_name, param))
         if eval_type is '':
             txt_name = os.path.join(txt_dir, 'stats_' + class_name + '_' + param + '.txt')
         else:
@@ -33,7 +37,8 @@ for class_name in classes:
 
         cont = np.loadtxt(txt_name)
 
-        for idx, difficulty in enumerate(difficulties):
+        averages = []
+        for idx, difficulty in enumerate(DIFFICULTIES):
             sum = 0;
             if (param is 'detection') or (param is 'orientation'):
                 for i in xrange(0, 40, 4):
@@ -45,10 +50,14 @@ for class_name in classes:
                     sum += cont[idx][i]
 
                 average = sum/cont.shape[1]
-            print class_name, difficulty, param, average
+            #print class_name, difficulty, param, average
+            averages.append(average)
 
-        print '----------------'
-        if eval_type is not '':
+        #print "\n"+class_name+" "+param
+        print("Easy\tMod.\tHard")
+        print("{:.4f}\t{:.4f}\t{:.4f}".format(averages[0], averages[1], averages[2]))
+        print("-----------------------\n")
+        if eval_type is not '' and param=='detection':
             break # No orientation for 3D or bird eye
 
-    print '================='
+    #print '================='
