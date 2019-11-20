@@ -756,7 +756,8 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
       v.push_back(pr_tmp.v[j]);
   }
 
-  if(n_gt<=0){
+  if(n_gt <= 0){
+    std::cout << "No GT samples found" << std::endl;
     return false;
   }
 
