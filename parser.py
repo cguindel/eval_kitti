@@ -41,10 +41,10 @@ for class_name in CLASSES:
         for idx, difficulty in enumerate(DIFFICULTIES):
             sum = 0;
             if (param is 'detection') or (param is 'orientation'):
-                for i in xrange(0, 40, 4):
+                for i in xrange(1, 41):
                     sum += cont[idx][i]
 
-                average = sum/11.0
+                average = sum/40.0
             else:
                 for i in xrange(0, cont.shape[1], 1):
                     sum += cont[idx][i]

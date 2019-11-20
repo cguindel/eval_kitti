@@ -8,7 +8,7 @@ The *eval_kitti* software contains tools to evaluate object detection results us
 ### Tools ###
 
 * *evaluate_object* is an improved version of the official KITTI evaluation that enables multi-class evaluation and splits of the training set for validation. It's updated according to the modifications introduced in 2017 by the KITTI authors.
-* *parser* is meant to provide mAP and mAOS stats from the precision-recall curves obtained with the evaluation script.
+* *parser* is meant to provide mAP and mAOS stats from the precision-recall curves obtained with the evaluation script (updated on November 2019 to reflect changes in the official evaluation)
 * *create_link* is a helper that can be used to create a link to the results obtained with [lsi-faster-rcnn](https://github.com/cguindel/lsi-faster-rcnn).
 
 ### Usage ###

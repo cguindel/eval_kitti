@@ -70,7 +70,7 @@ const int MIN_DIST = 10;
 const int DELTA_DIST = 5;
 const int MAX_DIST = 60;
 
-const double MIN_SCORE = -1;
+const double MIN_SCORE = -1000.0;
 
 // initialize class names
 void initGlobals () {
@@ -174,7 +174,7 @@ vector<tDetection> loadDetections(string file_name, bool &compute_aos,
       d.box.type = str;
       d.thresh = score;
       //d.thresh = exp(score);
-      if (d.thresh<MIN_SCORE)
+      if (d.thresh < MIN_SCORE)
         continue;
       detections.push_back(d);
 
@@ -761,6 +761,8 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
     return false;
   }
 
+
+
   // get scores that must be evaluated for recall discretization
   thresholds = getThresholds(v, n_gt);
 
@@ -778,7 +780,10 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
 
   for (int32_t i=0; i<groundtruth.size(); i++){
 
-    assert(thresholds.size()-1<100);
+    if (thresholds.size()-1 > 100){
+      cout << "Recall discretization failed. " << thresholds.size() << " thresholds found" << endl;
+      return false;
+    }
 
     if (analyze_recall){
       // for all IOUs do:
@@ -876,7 +881,7 @@ void saveAndPlotPlotsDist(string dir_name,string file_name,string obj_type,vecto
 
   // save plot data to file
   FILE *fp = fopen((dir_name + "/" + file_name + ".txt").c_str(),"w");
-  printf("save %s\n", (dir_name + "/" + file_name + ".txt").c_str());
+  printf("Saving %s\n", (dir_name + "/" + file_name + ".txt").c_str());
   for(int dist=0; dist<vals[0].size(); dist++){
 
     fprintf(fp,"%f %f %f %f\n",(float)dist*DELTA_DIST+MIN_DIST,vals[0][dist],vals[1][dist],vals[2][dist]);
@@ -939,9 +944,25 @@ void saveAndPlotPlots(string dir_name,string file_name,string obj_type,vector<do
 
   // save plot data to file
   FILE *fp = fopen((dir_name + "/" + file_name + ".txt").c_str(),"w");
-  printf("save %s\n", (dir_name + "/" + file_name + ".txt").c_str());
+  printf("Saving %s\n", (dir_name + "/" + file_name + ".txt").c_str());
   for (int32_t i=0; i<(int)N_SAMPLE_PTS; i++)
     fprintf(fp,"%f %f %f %f\n",(double)i/(N_SAMPLE_PTS-1.0),vals[0][i],vals[1][i],vals[2][i]);
+
+  if (!is_mppe){
+    double sum[3] = {0, 0, 0};
+    double average[3] = {0, 0, 0};
+    for (int v = 0; v < 3; ++v){
+      for (int i=1; i<=40; i++){
+        sum[v] += vals[v][i];
+      }
+      average[v] = sum[v]/40.0;
+    }
+    //fprintf(fp, "%s AP: %f %f %f\n", file_name.c_str(), average[0] * 100, average[1] * 100, average[2] * 100);
+    cout << "-----------" << endl;
+    printf("%s %s (%%): %.2f / %.2f / %.2f\n", file_name.c_str(), is_aos ? "AOS" : "AP", average[0] * 100, average[1] * 100, average[2] * 100);
+    cout << "-----------" << endl;
+  }
+
   fclose(fp);
 
   // create png + eps
