@@ -70,7 +70,7 @@ const int MIN_DIST = 10;
 const int DELTA_DIST = 5;
 const int MAX_DIST = 60;
 
-const double MIN_SCORE = 0.001;
+const double MIN_SCORE = -1;
 
 // initialize class names
 void initGlobals () {
@@ -150,7 +150,6 @@ struct tDetection {
 /*=======================================================================
 FUNCTIONS TO LOAD DETECTION AND GROUND TRUTH DATA ONCE, SAVE RESULTS
 =======================================================================*/
-
 vector<tDetection> loadDetections(string file_name, bool &compute_aos,
         vector<bool> &eval_image, vector<bool> &eval_ground,
         vector<bool> &eval_3d, bool &success, vector<int> &count) {
@@ -166,16 +165,17 @@ vector<tDetection> loadDetections(string file_name, bool &compute_aos,
     tDetection d;
     double trash;
     char str[255];
-    double log_score;
+    double score;
     if (fscanf(fp, "%s %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf",
                    str, &trash, &trash, &d.box.alpha, &d.box.x1, &d.box.y1,
                    &d.box.x2, &d.box.y2, &d.h, &d.w, &d.l, &d.t1, &d.t2, &d.t3,
-                   &d.ry, &log_score)==16) {
+                   &d.ry, &score)==16) {
 
       d.box.type = str;
-      d.thresh = exp(log_score);
+      d.thresh = score;
+      //d.thresh = exp(score);
       if (d.thresh<MIN_SCORE)
-         continue;
+        continue;
       detections.push_back(d);
 
       // orientation=-10 is invalid, AOS is not evaluated if at least one orientation is invalid
