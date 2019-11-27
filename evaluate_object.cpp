@@ -174,7 +174,7 @@ vector<tDetection> loadDetections(string file_name, bool &compute_aos,
       d.box.type = str;
       d.thresh = score;
       //d.thresh = exp(score);
-      if (d.thresh < MIN_SCORE)
+      if (d.thresh < MIN_SCORE || !strcasecmp(d.box.type.c_str(), "DontCare"))
         continue;
       detections.push_back(d);
 
@@ -431,7 +431,7 @@ vector<double> getThresholds(vector<double> &v, double n_groundtruth){
   return t;
 }
 
-void cleanData(CLASSES current_class, const vector<tGroundtruth> &gt, const vector<tDetection> &det, vector<int32_t> &ignored_gt, vector<tGroundtruth> &dc, vector<int32_t> &ignored_det, int32_t &n_gt, DIFFICULTY difficulty, int fixed_max_z=-1){
+void cleanData(CLASSES current_class, const vector<tGroundtruth> &gt, const vector<tDetection> &det, vector<int32_t> &ignored_gt, vector<tGroundtruth> &dc, vector<int32_t> &ignored_det, int32_t &n_gt, int &n_det, DIFFICULTY difficulty, int fixed_max_z=-1){
 
   // select max distance from ego-vehicle from either function parameter or global variable
   int max_z = fixed_max_z>0 ? fixed_max_z : MAX_Z[difficulty];
@@ -506,12 +506,14 @@ void cleanData(CLASSES current_class, const vector<tGroundtruth> &gt, const vect
     int32_t height = fabs(det[i].box.y1 - det[i].box.y2);
 
     // set ignored vector for detections
-    if(height<MIN_HEIGHT[difficulty])
+    if(height<MIN_HEIGHT[difficulty]){
       ignored_det.push_back(1);
-    else if(valid_class==1)
+    }else if(valid_class==1){
       ignored_det.push_back(0);
-    else
+      n_det++;
+    }else{
       ignored_det.push_back(-1);
+    }
   }
 }
 
@@ -729,6 +731,7 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
 
   // init
   int32_t n_gt=0;                                     // total no. of gt (denominator of recall)
+  int32_t n_det=0;                                    // total no. of valid detections (just for info)
   vector<double> v, thresholds;                       // detection scores, evaluated for recall discretization
   vector< vector<int32_t> > ignored_gt, ignored_det;  // index of ignored gt detection for current class/difficulty
   vector< vector<tGroundtruth> > dontcare;            // index of dontcare areas, included in ground truth
@@ -742,7 +745,7 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
     vector<tGroundtruth> dc;
 
     // only evaluate objects of current class and ignore occluded, truncated objects
-    cleanData(current_class, groundtruth[i], detections[i], i_gt, dc, i_det, n_gt, difficulty, fixed_max_z);
+    cleanData(current_class, groundtruth[i], detections[i], i_gt, dc, i_det, n_gt, n_det, difficulty, fixed_max_z);
     ignored_gt.push_back(i_gt);
     ignored_det.push_back(i_det);
     dontcare.push_back(dc);
@@ -757,11 +760,14 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
   }
 
   if(n_gt <= 0){
-    std::cout << "No GT samples found" << std::endl;
+    std::cout << "No GT instances found or they were all filtered" << std::endl;
     return false;
+  }else if (n_det <= 0){
+    std::cout << "No detections found or they were all filtered" << std::endl;
+    return false;
+  }else{
+    std::cout << "Evaluating on " << n_gt << " valid ground-truth instances and " << n_det << " valid detections" << std::endl;
   }
-
-
 
   // get scores that must be evaluated for recall discretization
   thresholds = getThresholds(v, n_gt);
@@ -1203,7 +1209,7 @@ bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_
       continue;
     }
     if (eval_image[c]) {
-      cout << "Starting 2D evaluation (" << CLASS_NAMES[c] << ") ..." << endl;
+      cout << CLASS_NAMES[c] << ": Starting 2D evaluation (Easy/Moderate/Hard)..." << endl;
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection.txt").c_str(), "w");
       fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour.txt").c_str(), "w");
       if(compute_aos)
@@ -1265,7 +1271,7 @@ bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_
       continue;
     }
     if (eval_ground[c]) {
-      cout << "Starting bird's eye evaluation (" << CLASS_NAMES[c] << ") ...";
+      cout << CLASS_NAMES[c] << ": Starting bird's eye view evaluation (Easy/Moderate/Hard)..." << endl;
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection_ground.txt").c_str(), "w");
       fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour_ground.txt").c_str(), "w");
       vector<double> precision[3], aos[3], mppe[3], recalls[3];
@@ -1292,7 +1298,7 @@ bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_
       continue;
     }
     if (eval_3d[c]) {
-      cout << "Starting 3D evaluation (" << CLASS_NAMES[c] << ") ..." << endl;
+      cout << CLASS_NAMES[c] << ": Starting 3D evaluation (Easy/Moderate/Hard)..." << endl;
       fp_det = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_detection_3d.txt").c_str(), "w");
       fp_iour = fopen((result_dir + "/stats_" + CLASS_NAMES[c] + "_iour_3d.txt").c_str(), "w");
       vector<double> precision[3], aos[3], mppe[3], recalls[3];
@@ -1317,7 +1323,7 @@ bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_
 
 int32_t main (int32_t argc,char *argv[]) {
 
-  if (argc<3 || argc>4) {
+  if (argc<3 || argc>5) {
     cout << "Usage: ./eval_detection result_sha val_dataset [analyze_recall (default=0)] [analyze_distance (default=0)]" << endl;
     return 1;
   }
