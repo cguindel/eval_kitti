@@ -36,6 +36,9 @@ for class_name in CLASSES:
             continue
 
         cont = np.loadtxt(txt_name)
+        # None if this class_name is detected.
+        if cont.size == 0:
+          continue
 
         averages = []
         for idx, difficulty in enumerate(DIFFICULTIES):
