@@ -1116,7 +1116,6 @@ bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_
   vector<bool> eval_3d(NUM_CLASS, false);
 
   std::cout << "Getting valid images... " << std::endl;
-  
   // Get image indices
   ifstream valid_imgs(valid_imgs_path.c_str());
   if (!valid_imgs.is_open()){
@@ -1124,22 +1123,17 @@ bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_
     exit(-1);
   }
   string line;
-  vector<std::string> file_names;
+  vector<int> indices;
   while (!valid_imgs.eof())
   {
     getline (valid_imgs,line);
-    if (line.size() == 0) {
-        continue;
+    if (atoi(line.c_str())!=0){
+      indices.push_back(atoi(line.c_str()));
     }
-    file_names.push_back(line.c_str());
-//     if (atoi(line.c_str())!=0){
-//       indices.push_back(atoi(line.c_str()));
-//     }
   }
   std::cout << "File loaded" << std::endl;
-  std::cout << "Num test images " << file_names.size() << std::endl;
 
-  N_TESTIMAGES = file_names.size();
+  N_TESTIMAGES = indices.size();
 
   // Just to get stats for each class
   vector<int> count, count_gt;
@@ -1151,18 +1145,18 @@ bool eval(string result_sha,string input_dataset,int analyze_recall,int analyze_
 
   for (int32_t i=0; i<N_TESTIMAGES; i++) {
 
-    // file name.
-    std::string file_name = file_names[i] + ".txt";
-//     switch (append_zeros){
-//       case 6:
-//         sprintf(file_name,"%06d.txt",indices[i]);
-//         break;
-//       case 8:
-//         sprintf(file_name,"%08d.txt",indices[i]);
-//         break;
-//       default:
-//         std::cout << "ERROR: Undefined number of zeros to append" << std::endl;
-//     }
+    // file name
+    char file_name[256];
+    switch (append_zeros){
+      case 6:
+        sprintf(file_name,"%06d.txt",indices[i]);
+        break;
+      case 8:
+        sprintf(file_name,"%08d.txt",indices[i]);
+        break;
+      default:
+        std::cout << "ERROR: Undefined number of zeros to append" << std::endl;
+    }
 
     // read ground truth and result poses
     bool gt_success,det_success;
