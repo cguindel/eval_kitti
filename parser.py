@@ -15,7 +15,7 @@ DIFFICULTIES = ['easy', 'moderate', 'hard']
 eval_type = ''
 
 if len(sys.argv)<2:
-    print 'Usage: parser.py results_folder [evaluation_type]'
+    print('Usage: parser.py results_folder [evaluation_type]')
 
 if len(sys.argv)==3:
     eval_type = sys.argv[2]
@@ -32,13 +32,13 @@ for class_name in CLASSES:
             txt_name = os.path.join(txt_dir, 'stats_' + class_name + '_' + param + '_' + eval_type + '.txt')
 
         if not os.path.isfile(txt_name):
-            print txt_name, 'not found'
+            print(txt_name, 'not found')
             continue
 
         cont = np.loadtxt(txt_name)
         # None if this class_name is detected.
         if cont.size == 0:
-          continue
+           continue
 
         averages = []
         for idx, difficulty in enumerate(DIFFICULTIES):
