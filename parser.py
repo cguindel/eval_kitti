@@ -44,23 +44,20 @@ for class_name in CLASSES:
         for idx, difficulty in enumerate(DIFFICULTIES):
             sum = 0;
             if (param is 'detection') or (param is 'orientation'):
-                for i in xrange(1, 41):
+                for i in range(1, 41):
                     sum += cont[idx][i]
 
                 average = sum/40.0
             else:
-                for i in xrange(0, cont.shape[1], 1):
+                for i in range(0, cont.shape[1], 1):
                     sum += cont[idx][i]
 
                 average = sum/cont.shape[1]
-            #print class_name, difficulty, param, average
             averages.append(average)
 
-        #print "\n"+class_name+" "+param
         print("Easy\tMod.\tHard")
         print("{:.4f}\t{:.4f}\t{:.4f}".format(averages[0], averages[1], averages[2]))
         print("-----------------------\n")
         if eval_type is not '' and param=='detection':
             break # No orientation for 3D or bird eye
 
-    #print '================='
