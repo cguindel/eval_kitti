@@ -732,6 +732,7 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
   // init
   int32_t n_gt=0;                                     // total no. of gt (denominator of recall)
   int32_t n_det=0;                                    // total no. of valid detections (just for info)
+  int32_t total_tp=0, total_fp=0, total_fn=0;
   vector<double> v, thresholds;                       // detection scores, evaluated for recall discretization
   vector< vector<int32_t> > ignored_gt, ignored_det;  // index of ignored gt detection for current class/difficulty
   vector< vector<tGroundtruth> > dontcare;            // index of dontcare areas, included in ground truth
@@ -757,7 +758,13 @@ bool eval_class (FILE *fp_det, FILE *fp_ori, const CLASSES current_class,
     // add detection scores to vector over all images
     for(int32_t j=0; j<pr_tmp.v.size(); j++)
       v.push_back(pr_tmp.v[j]);
+
+    total_tp += pr_tmp.tp;
+    total_fp += pr_tmp.fp;
+    total_fn += pr_tmp.fn;
   }
+
+  std::cout << "Raw Stats: " << total_tp << " TP; " << total_fn << " FN" << std::endl;
 
   if(n_gt <= 0){
     std::cout << "No GT instances found or they were all filtered" << std::endl;
